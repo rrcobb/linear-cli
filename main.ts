@@ -289,7 +289,7 @@ async function fetchIssuesForState(teamId: string, state: string, assigneeFilter
   }
 
   const query = /* GraphQL */ `
-    query issues($teamId: String!, $sort: [IssueSortInput!], $states: [String!], $filter: IssueFilter!) {
+    query issues($sort: [IssueSortInput!], $filter: IssueFilter!) {
       issues(
         filter: $filter
         sort: $sort
@@ -626,7 +626,13 @@ const issueCommand = new Command()
       }
 
       // Define column widths first
-      const { columns } = Deno.consoleSize();
+      let columns = 120; // default
+      try {
+        const consoleSize = Deno.consoleSize();
+        columns = consoleSize.columns;
+      } catch {
+        // Use default if consoleSize fails (e.g., non-TTY environment)
+      }
       const PRIORITY_WIDTH = 4;
       const ID_WIDTH = 8;
       const LABEL_WIDTH = columns <= 100 ? 12 : 24; // adjust label width based on terminal size
