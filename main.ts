@@ -266,7 +266,7 @@ async function fetchGraphQL(query: string, variables: Record<string, unknown>) {
   return data;
 }
 
-async function fetchIssuesForState(teamId: string, state: string) {
+async function fetchIssuesForState(teamId: string, state: string, assigneeFilter: "me" | "all" | "unowned" | string = "me") {
   const sort = getOption("issue_sort") as "manual" | "priority" | undefined;
   if (!sort) {
     console.error(
@@ -275,14 +275,23 @@ async function fetchIssuesForState(teamId: string, state: string) {
     Deno.exit(1);
   }
 
+  // Build assignee filter based on the filter type
+  let assigneeFilterClause: any;
+  if (assigneeFilter === "me") {
+    assigneeFilterClause = { isMe: { eq: true } };
+  } else if (assigneeFilter === "all") {
+    assigneeFilterClause = null; // No assignee filter
+  } else if (assigneeFilter === "unowned") {
+    assigneeFilterClause = { null: true };
+  } else {
+    // assigneeFilter is an email string
+    assigneeFilterClause = { email: { eq: assigneeFilter } };
+  }
+
   const query = /* GraphQL */ `
-    query issues($teamId: String!, $sort: [IssueSortInput!], $states: [String!]) {
+    query issues($teamId: String!, $sort: [IssueSortInput!], $states: [String!], $filter: IssueFilter!) {
       issues(
-        filter: {
-          team: { key: { eq: $teamId } }
-          assignee: { isMe: { eq: true } }
-          state: { type: { in: $states } }
-        }
+        filter: $filter
         sort: $sort
       ) {
         nodes {
@@ -313,10 +322,21 @@ async function fetchIssuesForState(teamId: string, state: string) {
     ? [{ manual: { nulls: "last", order: "Ascending" } }]
     : [{ priority: { nulls: "last", order: "Descending" } }];
 
+  // Build the complete filter
+  const filter: any = {
+    team: { key: { eq: teamId } },
+    state: { type: { in: [state] } }
+  };
+  
+  if (assigneeFilterClause) {
+    filter.assignee = assigneeFilterClause;
+  }
+
   return await fetchGraphQL(query, {
     teamId,
     sort: sortPayload,
     states: [state],
+    filter: filter,
   });
 }
 
@@ -548,9 +568,12 @@ const issueCommand = new Command()
       default: "unstarted",
     },
   )
+  .option("--all", "Show all issues (not just assigned to you)")
+  .option("--unowned", "Show only unassigned issues")
+  .option("--assignee <email:string>", "Show issues assigned to specific user (email)")
   .option("-w, --web", "Open in web browser")
   .option("-a, --app", "Open in Linear.app")
-  .action(async ({ sort: sortFlag, state, web, app }) => {
+  .action(async ({ sort: sortFlag, state, web, app, all, unowned, assignee }) => {
     if (web || app) {
       await openTeamPage({ app });
       return;
@@ -573,12 +596,32 @@ const issueCommand = new Command()
       Deno.exit(1);
     }
 
+    // Determine assignee filter based on options
+    let assigneeFilter: "me" | "all" | "unowned" | string = "me";
+    if (all) {
+      assigneeFilter = "all";
+    } else if (unowned) {
+      assigneeFilter = "unowned";
+    } else if (assignee) {
+      assigneeFilter = assignee;
+    }
+
     try {
-      const result = await fetchIssuesForState(teamId, state);
+      const result = await fetchIssuesForState(teamId, state, assigneeFilter);
       const issues = result.data.issues.nodes;
 
       if (issues.length === 0) {
-        console.log("No unstarted issues found.");
+        let message = `No ${state} issues found`;
+        if (assigneeFilter === "all") {
+          message += ".";
+        } else if (assigneeFilter === "unowned") {
+          message += " (unassigned).";
+        } else if (assigneeFilter === "me") {
+          message += " (assigned to you).";
+        } else {
+          message += ` (assigned to ${assigneeFilter}).`;
+        }
+        console.log(message);
         return;
       }
 
